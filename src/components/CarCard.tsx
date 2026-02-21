@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import type { Car, CarSavings, Household } from '../types';
+import type { Car, CarSavings } from '../types';
 import { formatCurrency, getProjectedResaleValue, getProjectedLoanBalance } from '../calculations';
 
 // Matches the assumed terms used in the timeline model (calculations.ts)
@@ -10,7 +10,7 @@ const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'S
 
 interface CarCardProps {
   savings: CarSavings;
-  household: Household;
+  projectedSavings: number;
   onDelete: (id: string) => void;
   onReplacementDateChange: (carId: string, year: number, month: number) => void;
   onReplacementCostChange: (carId: string, cost: number) => void;
@@ -129,7 +129,7 @@ function LedgerRow({
 
 export function CarCard({
   savings,
-  household,
+  projectedSavings: projectedSavingsAtReplacement,
   onDelete,
   onReplacementDateChange,
   onReplacementCostChange,
@@ -174,8 +174,8 @@ export function CarCard({
   const outOfPocket  = Math.max(0, car.replacementCost - resaleValue + loanBalance);
   const showLedger   = hasResale || hasLoan;
 
-  // Projected savings at replacement (simple per-car estimate; chart shows full shared picture)
-  const projectedSavings  = Math.max(0, household.totalSaved + household.monthlySavings * monthsRemaining);
+  // projectedSavingsAtReplacement is computed by App.tsx milestone calc (shared savings pool, sequential)
+  const projectedSavings  = Math.max(0, projectedSavingsAtReplacement);
   const paidWithCash      = Math.min(outOfPocket, projectedSavings);
   const newLoanAmount     = Math.max(0, outOfPocket - paidWithCash);
   const newLoanR          = ASSUMED_LOAN_APR_PCT / 100 / 12;

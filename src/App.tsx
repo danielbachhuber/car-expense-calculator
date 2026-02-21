@@ -57,76 +57,122 @@ export default function App() {
   const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const currentMonthAbs = CURRENT_YEAR * 12 + CURRENT_MONTH;
 
-  type ActiveLoan = { name: string; payment: number; endMonth: number };
-  type Milestone = { label: string; loanPayment: number; totalOutlay: number; loans: { name: string; payment: number }[] };
+  type ActiveLoan = { name: string; payment: number; endMonth: number; isNew?: boolean };
+  type Milestone = { label: string; loanPayment: number; newLoanPayment: number; milestoneNewPayment: number; totalOutlay: number; loans: { name: string; payment: number }[] };
 
-  const milestones: Milestone[] = (() => {
-    // Start with existing active loans
-    let loans: ActiveLoan[] = cars
-      .filter(c => c.loan && new Date(c.loan.maturityDate) > now)
-      .map(c => ({
-        name: c.name,
-        payment: c.loan!.monthlyPayment,
-        endMonth: (new Date(c.loan!.maturityDate).getFullYear() * 12 + new Date(c.loan!.maturityDate).getMonth()) - currentMonthAbs,
-      }));
+  // Sort cars by replacement date (shared across milestone calc and rate computations)
+  const sortedSavings = [...savingsResults].sort((a, b) => {
+    const aM = a.car.replacementYear * 12 + (a.car.replacementMonth ?? 0);
+    const bM = b.car.replacementYear * 12 + (b.car.replacementMonth ?? 0);
+    return aM - bM;
+  });
 
-    const todayLoanPayment = loans.reduce((s, l) => s + l.payment, 0);
+  const initialLoans: ActiveLoan[] = cars
+    .filter(c => c.loan && new Date(c.loan.maturityDate) > now)
+    .map(c => ({
+      name: c.name,
+      payment: c.loan!.monthlyPayment,
+      endMonth: (new Date(c.loan!.maturityDate).getFullYear() * 12 + new Date(c.loan!.maturityDate).getMonth()) - currentMonthAbs,
+    }));
+
+  const todayLoanPayment = initialLoans.reduce((s, l) => s + l.payment, 0);
+
+  /** Simulate milestones for a given monthly savings rate. Returns per-car savings and milestone array. */
+  function simulateMilestones(monthlySavings: number) {
+    let loans = initialLoans.map(l => ({ ...l }));
+    const perCarSavings = new Map<string, number>();
+
     const result: Milestone[] = [{
       label: 'Today',
       loanPayment: todayLoanPayment,
-      totalOutlay: todayLoanPayment + household.monthlySavings,
+      newLoanPayment: 0,
+      milestoneNewPayment: 0,
+      totalOutlay: todayLoanPayment + monthlySavings,
       loans: loans.map(l => ({ name: l.name, payment: l.payment })),
     }];
-
-    // Sort cars by replacement date
-    const sorted = [...savingsResults].sort((a, b) => {
-      const aM = a.car.replacementYear * 12 + (a.car.replacementMonth ?? 0);
-      const bM = b.car.replacementYear * 12 + (b.car.replacementMonth ?? 0);
-      return aM - bM;
-    });
 
     let savingsBalance = household.totalSaved;
     let lastMonth = 0;
     let replacementIndex = 0;
 
-    for (const s of sorted) {
+    for (const s of sortedSavings) {
       const car = s.car;
       const repMonth = car.replacementMonth ?? 0;
       const monthsFromNow = (car.replacementYear * 12 + repMonth) - currentMonthAbs;
 
-      // Accumulate savings
-      savingsBalance += household.monthlySavings * (monthsFromNow - lastMonth);
+      savingsBalance += monthlySavings * (monthsFromNow - lastMonth);
+      perCarSavings.set(car.id, savingsBalance);
 
-      // Remove old loan for this car (settled at trade-in) and any matured loans
       loans = loans.filter(l => l.name !== car.name && l.endMonth > monthsFromNow);
 
-      // Out-of-pocket = replacement cost − trade-in + loan payoff
       const outOfPocket = Math.max(0, car.replacementCost - s.projectedResaleValue + s.projectedLoanBalance);
       const paidWithCash = Math.min(outOfPocket, savingsBalance);
       const newLoanAmount = Math.max(0, outOfPocket - paidWithCash);
       savingsBalance -= paidWithCash;
 
-      // New loan payment — label as "Replacement car N"
       replacementIndex++;
       const replacementLabel = `Replacement car ${replacementIndex}`;
+      let thisEventPayment = 0;
       if (newLoanAmount > 0) {
         const r = NEW_LOAN_APR / 12;
         const pmt = newLoanAmount * r / (1 - Math.pow(1 + r, -NEW_LOAN_TERM));
-        loans.push({ name: replacementLabel, payment: pmt, endMonth: monthsFromNow + NEW_LOAN_TERM });
+        loans.push({ name: replacementLabel, payment: pmt, endMonth: monthsFromNow + NEW_LOAN_TERM, isNew: true });
+        thisEventPayment = pmt;
       }
 
       const milestoneLoanPayment = loans.reduce((s, l) => s + l.payment, 0);
+      const milestoneNewLoanPayment = loans.filter(l => l.isNew).reduce((s, l) => s + l.payment, 0);
       result.push({
         label: `${monthNames[repMonth]} ${car.replacementYear} — replace ${car.name}`,
         loanPayment: milestoneLoanPayment,
-        totalOutlay: milestoneLoanPayment + household.monthlySavings,
+        newLoanPayment: milestoneNewLoanPayment,
+        milestoneNewPayment: thisEventPayment,
+        totalOutlay: milestoneLoanPayment + monthlySavings,
         loans: loans.map(l => ({ name: l.name, payment: l.payment })),
       });
 
       lastMonth = monthsFromNow;
     }
 
-    return result;
+    return { milestones: result, perCarSavings };
+  }
+
+  // Primary milestones using current savings rate
+  const { milestones, perCarSavings: projectedSavingsAtReplacement } = simulateMilestones(household.monthlySavings);
+
+  // Binary search for a target savings rate
+  function findSavingsRate(predicate: (monthlySavings: number) => boolean, lo = 0, hi = 20000): number {
+    for (let i = 0; i < 50; i++) {
+      const mid = (lo + hi) / 2;
+      if (predicate(mid)) hi = mid; else lo = mid;
+    }
+    return Math.ceil(hi);
+  }
+
+  // "Cash only" rate: no new replacement loans needed at any replacement
+  const cashOnlyRate = findSavingsRate((rate) => {
+    const { milestones: ms } = simulateMilestones(rate);
+    return ms.slice(1).every(m => m.newLoanPayment < 0.01);
+  });
+
+  // "Status quo" rate: max savings rate where each replacement's new loan + rate ≤ today's outlay.
+  // Per-event check: at each replacement, the new loan taken for THAT car + savings rate stays within budget.
+  const todayOutlay = todayLoanPayment + household.monthlySavings;
+  const statusQuoRate = (() => {
+    // Find max rate where all milestones satisfy: milestoneNewPayment + rate ≤ todayOutlay
+    // Since (milestoneNewPayment + rate) increases monotonically with rate, we find the threshold.
+    let lo = 0, hi = 20000;
+    for (let i = 0; i < 50; i++) {
+      const mid = (lo + hi) / 2;
+      const { milestones: ms } = simulateMilestones(mid);
+      const feasible = ms.slice(1).every(m => m.milestoneNewPayment + mid <= todayOutlay + 0.01);
+      if (feasible) lo = mid; else hi = mid;
+    }
+    // If even rate=0 is infeasible, return null
+    const { milestones: check } = simulateMilestones(0);
+    const feasibleAtZero = check.slice(1).every(m => m.milestoneNewPayment <= todayOutlay + 0.01);
+    if (!feasibleAtZero) return null;
+    return Math.floor(lo);
   })();
 
   const handleReplacementDateChange = useCallback((carId: string, year: number, month: number) => {
@@ -166,17 +212,48 @@ export default function App() {
 
             {/* Row 1: Current cost */}
             <div>
-              <div className="text-xs text-slate-400 uppercase tracking-wide font-medium mb-1">Right now</div>
-              <div>
-                <span className="text-slate-600 text-sm">Your cars cost </span>
-                <span className="text-2xl font-bold text-slate-900">{formatMonthlyCurrency(monthlyOwnershipCost)}/mo</span>
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="text-xs text-slate-400 uppercase tracking-wide font-medium mb-1">Right now</div>
+                  <div>
+                    <span className="text-slate-600 text-sm">Your cars cost </span>
+                    <span className="text-2xl font-bold text-slate-900">{formatMonthlyCurrency(monthlyOwnershipCost)}/mo</span>
+                  </div>
+                </div>
+                <div className="text-xs text-slate-400 text-right space-y-0.5">
+                  <div>
+                    Saving{' '}
+                    <button
+                      onClick={() => {
+                        const raw = prompt('Monthly savings amount ($):', String(household.monthlySavings));
+                        if (raw !== null && !isNaN(Number(raw))) updateHousehold({ ...household, monthlySavings: Number(raw) });
+                      }}
+                      className="text-slate-500 font-medium hover:text-blue-600 transition-colors"
+                    >
+                      {formatMonthlyCurrency(household.monthlySavings)}/mo
+                    </button>
+                    {' · '}
+                    <button
+                      onClick={() => {
+                        const raw = prompt('Total saved ($):', String(household.totalSaved));
+                        if (raw !== null && !isNaN(Number(raw))) updateHousehold({ ...household, totalSaved: Number(raw) });
+                      }}
+                      className="text-slate-500 font-medium hover:text-slate-700 transition-colors"
+                    >
+                      {formatCurrency(household.totalSaved)}
+                    </button>
+                    {' '}set aside
+                  </div>
+                  <div>Status quo: <span className="text-slate-500 font-medium">{statusQuoRate !== null ? `${formatCurrency(statusQuoRate)}/mo` : 'N/A'}</span></div>
+                  <div>Cash only: <span className="text-slate-500 font-medium">{formatCurrency(cashOnlyRate)}/mo</span></div>
+                </div>
               </div>
-              <div className="flex items-end justify-between mt-1">
+              <div className="mt-1 space-y-0.5">
                 <div className="text-xs text-slate-400">
                   {formatCurrency(totalPurchasePrice)} purchase + {formatCurrency(totalLoanInterest)} interest − {formatCurrency(totalProjectedResale)} resale
                 </div>
-                <div className="text-xs text-slate-400 text-right">
-                  {savingsResults.map((s) => {
+                <div className="text-xs text-slate-400">
+                  {savingsResults.map((s, i) => {
                     const car = s.car;
                     if (!car.purchaseDate) return null;
                     const pd = new Date(car.purchaseDate);
@@ -186,9 +263,10 @@ export default function App() {
                     const months = totalMonths % 12;
                     const duration = months > 0 ? `${years}yr ${months}mo` : `${years}yr`;
                     return (
-                      <div key={car.id}>
-                        {car.name} · {duration}
-                      </div>
+                      <span key={car.id}>
+                        {i > 0 && ' · '}
+                        {car.name} {duration}
+                      </span>
                     );
                   })}
                 </div>
@@ -197,31 +275,8 @@ export default function App() {
 
             {/* Row 2: Looking ahead — projected loan payments */}
             <div className="border-t border-slate-100 pt-4">
-              <div className="flex items-baseline justify-between mb-2">
+              <div className="mb-2">
                 <div className="text-xs text-slate-400 uppercase tracking-wide font-medium">Looking ahead</div>
-                <div className="text-xs text-slate-400">
-                  Saving{' '}
-                  <button
-                    onClick={() => {
-                      const raw = prompt('Monthly savings amount ($):', String(household.monthlySavings));
-                      if (raw !== null && !isNaN(Number(raw))) updateHousehold({ ...household, monthlySavings: Number(raw) });
-                    }}
-                    className="text-slate-500 font-medium hover:text-blue-600 transition-colors"
-                  >
-                    {formatMonthlyCurrency(household.monthlySavings)}/mo
-                  </button>
-                  {' · '}
-                  <button
-                    onClick={() => {
-                      const raw = prompt('Total saved ($):', String(household.totalSaved));
-                      if (raw !== null && !isNaN(Number(raw))) updateHousehold({ ...household, totalSaved: Number(raw) });
-                    }}
-                    className="text-slate-500 font-medium hover:text-slate-700 transition-colors"
-                  >
-                    {formatCurrency(household.totalSaved)}
-                  </button>
-                  {' '}set aside
-                </div>
               </div>
               <div className="space-y-2">
                 {milestones.map((m, i) => (
@@ -270,7 +325,7 @@ export default function App() {
             <CarCard
               key={s.car.id}
               savings={s}
-              household={household}
+              projectedSavings={projectedSavingsAtReplacement.get(s.car.id) ?? (household.totalSaved + household.monthlySavings * s.monthsRemaining)}
               onDelete={deleteCar}
               onReplacementDateChange={handleReplacementDateChange}
               onReplacementCostChange={handleReplacementCostChange}

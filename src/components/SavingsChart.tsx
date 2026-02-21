@@ -69,6 +69,12 @@ export function SavingsChart({ household, cars, currentYear, currentMonth }: Sav
   const chartXMax = data[data.length - 1].x;
   const yearTicks  = data.filter(d => d.label).map(d => d.x);
 
+  // Symmetric Y axis: same magnitude above and below $0
+  const maxSavings = Math.max(...chartData.map(d => d.balance));
+  const maxLoans   = Math.max(...chartData.map(d => -d.loansNeg));
+  const yExtent    = Math.max(maxSavings, maxLoans);
+  const yDomain: [number, number] = [-yExtent, yExtent];
+
   return (
     <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm mb-6">
       <div className="flex items-center justify-between mb-3">
@@ -104,10 +110,11 @@ export function SavingsChart({ household, cars, currentYear, currentMonth }: Sav
           />
 
           <YAxis
+            domain={yDomain}
             tickFormatter={(v) => {
               const abs = Math.abs(v);
-              const fmt = abs >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v);
-              return `$${fmt}`;
+              const fmt = abs >= 1000 ? `$${(v / 1000).toFixed(0)}k` : `$${v}`;
+              return fmt;
             }}
             tick={{ fontSize: 12, fill: '#64748b' }}
             width={60}
