@@ -29,8 +29,9 @@ export default defineConfig({
             let body = ''
             req.on('data', chunk => { body += chunk })
             req.on('end', () => {
-              writeFileSync(DATA_FILE, body, 'utf-8')
-              res.end(body)
+              const pretty = JSON.stringify(JSON.parse(body), null, 2)
+              writeFileSync(DATA_FILE, pretty, 'utf-8')
+              res.end(pretty)
             })
           } else {
             res.statusCode = 405

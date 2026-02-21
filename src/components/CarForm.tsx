@@ -16,6 +16,7 @@ function emptyForm() {
     replacementCost: '',
     replacementYear: String(CURRENT_YEAR + 5),
     currentSavings: '0',
+    estimatedResaleValue: '',
   };
 }
 
@@ -30,6 +31,7 @@ export function CarForm({ initial, onSave, onCancel }: CarFormProps) {
         replacementCost: String(initial.replacementCost),
         replacementYear: String(initial.replacementYear),
         currentSavings: String(initial.currentSavings),
+        estimatedResaleValue: initial.estimatedResaleValue != null ? String(initial.estimatedResaleValue) : '',
       });
     } else {
       setForm(emptyForm());
@@ -45,6 +47,8 @@ export function CarForm({ initial, onSave, onCancel }: CarFormProps) {
       replacementCost: Number(form.replacementCost) || 0,
       replacementYear: Number(form.replacementYear) || CURRENT_YEAR + 5,
       currentSavings: Number(form.currentSavings) || 0,
+      estimatedResaleValue: form.estimatedResaleValue !== '' ? Number(form.estimatedResaleValue) : undefined,
+      estimatedResaleYear: form.estimatedResaleValue !== '' ? (Number(form.replacementYear) || CURRENT_YEAR + 5) : undefined,
     });
   }
 
@@ -70,6 +74,7 @@ export function CarForm({ initial, onSave, onCancel }: CarFormProps) {
       {field('Expected replacement cost ($)', 'replacementCost', 'number', { placeholder: '35000', min: '0', required: true })}
       {field('Replacement year', 'replacementYear', 'number', { placeholder: String(CURRENT_YEAR + 5), min: String(CURRENT_YEAR), required: true })}
       {field('Current savings toward this car ($)', 'currentSavings', 'number', { placeholder: '0', min: '0' })}
+      {field('Estimated trade-in / resale value at replacement ($)', 'estimatedResaleValue', 'number', { placeholder: '0', min: '0' })}
 
       <div className="flex gap-2 pt-2">
         <button

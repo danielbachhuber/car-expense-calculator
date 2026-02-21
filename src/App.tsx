@@ -1,23 +1,35 @@
 import { useState, useCallback } from 'react';
 import type { Car } from './types';
-import { calculateCarSavings, calculateTotalMonthlySavings, formatMonthlyCurrency } from './calculations';
+import { calculateCarSavings, calculateTotalMonthlySavings, formatMonthlyCurrency, formatCurrency } from './calculations';
 import { CarCard } from './components/CarCard';
 import { CarForm } from './components/CarForm';
-import { useCars } from './useCars';
+import { SavingsChart } from './components/SavingsChart';
+import { useAppData } from './useAppData';
 
 const now = new Date();
 const CURRENT_YEAR = now.getFullYear();
 const CURRENT_MONTH = now.getMonth(); // 0-indexed
 
 export default function App() {
-  const { cars, loaded, addCar, updateCar, deleteCar } = useCars();
+  const { household, cars, loaded, updateHousehold, addCar, updateCar, deleteCar } = useAppData();
   const [showForm, setShowForm] = useState(false);
-  const [editingCar, setEditingCar] = useState<Car | null>(null);
 
   const savingsResults = cars.map(car =>
     calculateCarSavings(car, CURRENT_YEAR, CURRENT_MONTH)
   );
-  const totalMonthly = calculateTotalMonthlySavings(savingsResults);
+  const totalMonthlyNeeded = calculateTotalMonthlySavings(savingsResults);
+  const gap = totalMonthlyNeeded - household.monthlySavings;
+  const onTrack = gap <= 0;
+
+  const handleReplacementDateChange = useCallback((carId: string, year: number, month: number) => {
+    const car = cars.find(c => c.id === carId);
+    if (car) updateCar({ ...car, replacementYear: year, replacementMonth: month });
+  }, [cars, updateCar]);
+
+  const handleReplacementCostChange = useCallback((carId: string, cost: number) => {
+    const car = cars.find(c => c.id === carId);
+    if (car) updateCar({ ...car, replacementCost: cost });
+  }, [cars, updateCar]);
 
   const handleSave = useCallback((data: Omit<Car, 'id'> & { id?: string }) => {
     if (data.id) {
@@ -26,17 +38,10 @@ export default function App() {
       addCar(data as Omit<Car, 'id'>);
     }
     setShowForm(false);
-    setEditingCar(null);
   }, [addCar, updateCar]);
-
-  const handleEdit = useCallback((car: Car) => {
-    setEditingCar(car);
-    setShowForm(true);
-  }, []);
 
   const handleCancel = useCallback(() => {
     setShowForm(false);
-    setEditingCar(null);
   }, []);
 
   return (
@@ -52,14 +57,64 @@ export default function App() {
 
         {/* Summary banner */}
         {cars.length > 0 && (
-          <div className="rounded-2xl bg-blue-600 text-white p-6 mb-6 flex items-center justify-between shadow">
-            <div>
-              <div className="text-blue-200 text-sm font-medium">Total monthly savings target</div>
-              <div className="text-4xl font-bold mt-1">{formatMonthlyCurrency(totalMonthly)}</div>
-              <div className="text-blue-200 text-sm mt-1">across {cars.length} car{cars.length !== 1 ? 's' : ''}</div>
+          <div className="rounded-2xl bg-blue-600 text-white p-6 mb-4 shadow">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-blue-200 text-sm font-medium">Monthly savings target</div>
+                <div className="text-4xl font-bold mt-1">{formatMonthlyCurrency(totalMonthlyNeeded)}</div>
+                <div className="text-blue-200 text-sm mt-1">across {cars.length} car{cars.length !== 1 ? 's' : ''}</div>
+              </div>
+              <div className="text-6xl opacity-20 select-none shrink-0">🚗</div>
             </div>
-            <div className="text-6xl opacity-20 select-none">🚗</div>
+
+            {/* Savings rate row */}
+            <div className="mt-4 pt-4 border-t border-blue-500 grid grid-cols-3 gap-3 text-center">
+              <div>
+                <div className="text-blue-200 text-xs mb-0.5">You're saving</div>
+                <div className="text-lg font-semibold">
+                  <button
+                    onClick={() => {
+                      const raw = prompt('Monthly savings amount ($):', String(household.monthlySavings));
+                      if (raw !== null && !isNaN(Number(raw))) updateHousehold({ ...household, monthlySavings: Number(raw) });
+                    }}
+                    className="hover:underline"
+                  >
+                    {formatMonthlyCurrency(household.monthlySavings)}/mo
+                  </button>
+                </div>
+              </div>
+              <div>
+                <div className="text-blue-200 text-xs mb-0.5">Total saved</div>
+                <div className="text-lg font-semibold">
+                  <button
+                    onClick={() => {
+                      const raw = prompt('Total saved ($):', String(household.totalSaved));
+                      if (raw !== null && !isNaN(Number(raw))) updateHousehold({ ...household, totalSaved: Number(raw) });
+                    }}
+                    className="hover:underline"
+                  >
+                    {formatCurrency(household.totalSaved)}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <div className="text-blue-200 text-xs mb-0.5">{onTrack ? 'Monthly surplus' : 'Monthly gap'}</div>
+                <div className={`text-lg font-semibold ${onTrack ? 'text-green-300' : 'text-red-300'}`}>
+                  {onTrack ? '+' : '-'}{formatMonthlyCurrency(Math.abs(gap))}/mo
+                </div>
+              </div>
+            </div>
           </div>
+        )}
+
+        {/* Timeline chart */}
+        {cars.length > 0 && (
+          <SavingsChart
+            household={household}
+            cars={cars}
+            currentYear={CURRENT_YEAR}
+            currentMonth={CURRENT_MONTH}
+          />
         )}
 
         {/* Car cards */}
@@ -68,8 +123,11 @@ export default function App() {
             <CarCard
               key={s.car.id}
               savings={s}
-              onEdit={handleEdit}
               onDelete={deleteCar}
+              onReplacementDateChange={handleReplacementDateChange}
+              onReplacementCostChange={handleReplacementCostChange}
+              currentYear={CURRENT_YEAR}
+              currentMonth={CURRENT_MONTH}
             />
           ))}
 
@@ -82,14 +140,12 @@ export default function App() {
           )}
         </div>
 
-        {/* Add / Edit form */}
+        {/* Add car form */}
         {showForm ? (
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-800 mb-4">
-              {editingCar ? 'Edit car' : 'Add a car'}
-            </h2>
+            <h2 className="text-lg font-semibold text-slate-800 mb-4">Add a car</h2>
             <CarForm
-              initial={editingCar}
+              initial={null}
               onSave={handleSave}
               onCancel={handleCancel}
             />
