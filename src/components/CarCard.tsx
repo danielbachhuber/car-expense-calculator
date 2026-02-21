@@ -202,6 +202,16 @@ export function CarCard({
         </button>
       </div>
 
+      {/* ── Purchase details ──────────────────────────────────────────── */}
+      {car.purchasePrice != null && car.purchasePrice > 0 && (
+        <div className="text-xs text-slate-400">
+          {formatCurrency(car.purchasePrice)} purchase
+          {car.loan && (
+            <> · {formatCurrency(car.purchasePrice - car.loan.originalAmount)} down · {formatCurrency(car.loan.originalAmount)} loan</>
+          )}
+        </div>
+      )}
+
       {/* ── Replacement date row ────────────────────────────────────────── */}
       <div className="flex items-center gap-2 flex-wrap">
         {/* Segmented pill: [Replacement date] [← Mon YYYY →] [Age: Xyr Ymo] */}
