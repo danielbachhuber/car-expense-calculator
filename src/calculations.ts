@@ -2,6 +2,15 @@ import type { Car, CarSavings, Household } from './types';
 
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+/** Assumed terms for any new financing loan taken at a replacement event. */
+const NEW_LOAN_APR_PCT = 7;    // %
+const NEW_LOAN_MONTHS  = 60;   // 5-year term
+
+interface NewLoan {
+  balance: number;
+  payment: number; // fixed monthly payment (principal + interest)
+}
+
 export type TimelinePoint = {
   /** Fractional year used as chart x-value. */
   x: number;
@@ -121,15 +130,17 @@ export function generateSavingsTimeline(
 
   const points: TimelinePoint[] = [];
   let balance        = household.totalSaved;
-  let newLoanBalance = 0; // running balance of any loan taken to cover a shortfall
+  const newLoans: NewLoan[] = []; // financing loans taken at replacement events
   const replacedCars = new Set<string>();
 
-  /** Sum of unreplaced car loans + any new financing loan. */
+  /** Sum of unreplaced car loans + any outstanding new financing loans. */
   function totalLoans(y: number, mo: number): number {
-    return cars.reduce((sum, car) => {
+    const carLoans = cars.reduce((sum, car) => {
       if (replacedCars.has(car.id)) return sum;
       return sum + getProjectedLoanBalance(car, y, mo);
-    }, 0) + newLoanBalance;
+    }, 0);
+    const newLoanTotal = newLoans.reduce((sum, l) => sum + l.balance, 0);
+    return carLoans + newLoanTotal;
   }
 
   /** Sum of equity (projected value − loan) for each unreplaced car, floored at 0 per car. */
@@ -161,13 +172,18 @@ export function generateSavingsTimeline(
   // Run through every month until Jan of (endYear + 1)
   while (y < endYear + 1 || (y === endYear + 1 && m === 0)) {
 
-    // Monthly savings: repay new loan first, then accumulate
-    if (newLoanBalance > 0) {
-      const repayment = Math.min(household.monthlySavings, newLoanBalance);
-      newLoanBalance = Math.max(0, newLoanBalance - repayment);
-      balance += household.monthlySavings - repayment;
-    } else {
-      balance += household.monthlySavings;
+    // $800/mo savings accumulates independently — car loan payments are a
+    // separate budget line and never reduce this contribution.
+    balance += household.monthlySavings;
+
+    // Tick each new financing loan down via its own amortization schedule.
+    const r = NEW_LOAN_APR_PCT / 100 / 12;
+    for (const loan of newLoans) {
+      if (loan.balance > 0) {
+        const interest  = loan.balance * r;
+        const principal = Math.min(loan.payment - interest, loan.balance);
+        loan.balance    = Math.max(0, loan.balance - principal);
+      }
     }
 
     // Cars being replaced this month
@@ -199,8 +215,13 @@ export function generateSavingsTimeline(
         replacedCars.add(car.id);
 
         if (netCost > balance) {
-          // Cover shortfall with a new loan
-          newLoanBalance += netCost - balance;
+          // Cover shortfall with a new financing loan (assumed 7% APR / 60 mo).
+          // Payments on the new loan come out of the regular budget — NOT the
+          // $800/mo savings contribution.
+          const shortfall = netCost - balance;
+          const r = NEW_LOAN_APR_PCT / 100 / 12;
+          const payment = shortfall * r / (1 - Math.pow(1 + r, -NEW_LOAN_MONTHS));
+          newLoans.push({ balance: shortfall, payment });
           balance = 0;
         } else {
           balance -= netCost;
